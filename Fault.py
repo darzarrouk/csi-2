@@ -22,7 +22,11 @@ import os
 # Personals
 from .SourceInv import SourceInv
 from .EDKSmp import sum_layered
+from .EDKSmp import sum_layered_fomosto
 from .EDKSmp import dropSourcesInPatches as Patches2Sources
+from .EDKSmp import interpolateEDKS
+
+from skspatial.objects import Line
 
 #class Fault
 class Fault(SourceInv):
@@ -54,7 +58,7 @@ class Fault(SourceInv):
             print ("---------------------------------")
             print ("Initializing fault {}".format(self.name))
         self.verbose = verbose
-        
+
         self.type = "Fault"
 
         # Specify the type of patch
@@ -765,7 +769,7 @@ class Fault(SourceInv):
         if coord in ('ll', 'lonlat'):
             x, y = self.ll2xy(lon, lat)
         elif coord in ('xy', 'utm'):
-            x,y = lon, lat
+            x, y = lon, lat
 
         # Fault coordinates
         if discretized:
@@ -787,16 +791,17 @@ class Fault(SourceInv):
         d[imin2] = 999999.
         dtot = dmin1+dmin2
 
-        # Along the fault?
-        xc = (xf[imin1]*dmin1 + xf[imin2]*dmin2)/dtot
-        yc = (yf[imin1]*dmin1 + yf[imin2]*dmin2)/dtot
+        line = Line.from_points([xf[imin1], yf[imin1]], [xf[imin2], yf[imin2]])
+        pp = line.project_point([x, y])
+        xc = pp[0]
+        yc = pp[1]
 
         # Distance
-        if dmin1<dmin2:
-            jm = imin1
+        jm = imin1
+        if imin1 < imin2:
+            dalong = cumdis[jm] - np.sqrt((xc-xf[jm])**2 + (yc-yf[jm])**2)
         else:
-            jm = imin2
-        dalong = cumdis[jm] + np.sqrt( (xc-xf[jm])**2 + (yc-yf[jm])**2 )
+            dalong = cumdis[jm] + np.sqrt((xc-xf[jm])**2 + (yc-yf[jm])**2)
         dacross = np.sqrt((xc-x)**2 + (yc-y)**2)
 
         # All done
@@ -996,9 +1001,9 @@ class Fault(SourceInv):
             data.setGFsInFault(self, G, vertical=vertical)
             return
 
-        # Chech something
+        # Check something
         if self.patchType == 'triangletent':
-            assert method == 'edks', 'Homogeneous case not implemented for {} faults'.format(self.patchType)
+            assert method == ('edks', 'fmst'), 'Homogeneous case not implemented for {} faults'.format(self.patchType)
 
         # Check something
         if method in ('homogeneous', 'Homogeneous'):
@@ -1039,8 +1044,8 @@ class Fault(SourceInv):
                 G = self.edksGFs(data, vertical=vertical, slipdir=slipdir, verbose=verbose, convergence=convergence, method='fortran')
             else:
                 G = self.edksGFs(data, vertical=vertical, slipdir=slipdir, verbose=verbose, convergence=convergence, method='python')
-        elif method in ('empty'):
-            G = self.emptyGFs(data, vertical=vertical, slipdir=slipdir, verbose=verbose)
+        elif method in ('fmst', 'fomosto'):
+            G = self.edksGFs(data, vertical=vertical, slipdir=slipdir, verbose=verbose, convergence=convergence, method='fomosto')
 
         # Separate the Green's functions for each type of data set
         data.setGFsInFault(self, G, vertical=vertical)
@@ -1380,7 +1385,7 @@ class Fault(SourceInv):
     def edksGFs(self, data, vertical=True, slipdir='sd', verbose=True,
                       convergence=None, method='fortran'):
         '''
-        Builds the Green's functions based on the solution by Zhao & Rivera 2002.
+        Builds the Green's functions based on the solution by Zhu & Rivera 2002.
         The corresponding functions are in the EDKS code that needs to be installed and
         the executables should be found in the directory set by the environment
         variable EDKS_BIN.
@@ -1416,7 +1421,7 @@ class Fault(SourceInv):
             print('---------------------------------')
             print('---------------------------------')
             print ("Building Green's functions for the data set")
-            print("{} of type {} using EDKS on fault {}".format(data.name, data.dtype, self.name))
+            print("{} of type {} using {} on fault {}".format(data.name, data.dtype, method, self.name))
 
         # Check if we can find kernels
         if not hasattr(self, 'kernelsEDKS'):
@@ -1432,7 +1437,7 @@ class Fault(SourceInv):
                 print('---------------------------------')
             self.kernelsEDKS = 'kernels.edks'
         stratKernels = self.kernelsEDKS
-        assert os.path.isfile(stratKernels), 'Kernels for EDKS not found...'
+        assert (os.path.isfile(stratKernels) or os.path.isdir(stratKernels)), 'Kernels for EDKS not found...'
 
         # Show me
         if verbose:
@@ -1528,7 +1533,7 @@ class Fault(SourceInv):
             inter.readHeader()
             inter.readKernel()
 
-        # Run EDKS Strike slip
+        # Run EDKS Strike Slip
         if 's' in slipdir:
             if verbose:
                 print('Running Strike Slip component for data set {}'.format(data.name))
@@ -1543,6 +1548,8 @@ class Fault(SourceInv):
                                                   dip*np.pi/180., np.zeros(dip.shape),
                                                   Areas, slip, 
                                                   xr, yr, method='linear'))
+            elif method in ('fomosto'):
+                iGss = np.array(sum_layered_fomosto(xs, ys, zs, strike, dip, np.zeros(dip.shape), Areas, slip, xr, yr, stratKernels))
             if verbose:
                 print('Summing sub-sources...')
             Gss = np.zeros((3, iGss.shape[1],np.unique(Ids).shape[0]))
@@ -1552,7 +1559,7 @@ class Fault(SourceInv):
         else:
             Gss = np.zeros((3, len(data.x), len(self.patch)))
 
-        # Run EDKS dip slip
+        # Run EDKS Dip Slip
         if 'd' in slipdir:
             if verbose:
                 print('Running Dip Slip component for data set {}'.format(data.name))
@@ -1568,6 +1575,8 @@ class Fault(SourceInv):
                                                   np.ones(dip.shape)*np.pi/2.,
                                                   Areas, slip, 
                                                   xr, yr, method='linear'))
+            elif method in ('fomosto'):
+                iGds = np.array(sum_layered_fomosto(xs, ys, zs, strike, dip, np.ones(dip.shape) * 90.0, Areas, slip, xr, yr, stratKernels))
             if verbose:
                 print('Summing sub-sources...')
             Gds = np.zeros((3, iGds.shape[1], np.unique(Ids).shape[0]))
@@ -1581,7 +1590,7 @@ class Fault(SourceInv):
         if 't' in slipdir:
             assert False, 'Sorry, this is not working so far... Bryan should get it done soon...'
             if verbose:
-                print('Running tensile component for data set {}'.format(data.name))
+                print('Running Tensile component for data set {}'.format(data.name))
             if method not in ('fortran'): 
                 raise NotImplementedError('Tensile case not implemented in python yet')
             iGts = np.array(sum_layered(xs, ys, zs,
@@ -2248,16 +2257,12 @@ class Fault(SourceInv):
             * None
         '''
 
-        # Check if the Green's function are ready
-        assert self.Gassembled is not None, \
-                "You should assemble the Green's function matrix first"
-
         # Check
         if type(datas) is not list:
             datas = [datas]
 
-        # Get the total number of data
-        Nd = self.Gassembled.shape[0]
+        # Get the total number of data (based on d instead of G)
+        Nd = self.dassembled.shape[0]
         Cd = np.zeros((Nd, Nd))
 
         # Loop over the data sets
