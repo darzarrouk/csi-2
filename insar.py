@@ -984,11 +984,11 @@ class insar(SourceInv):
 
         elif function='gauss':
 
-            :math:`C_d(i,j) = \sigma^2 e^{-\\frac{d_{i,j}^2}{2*\lambda}}`
+            :math:`C_d(i,j) = \sigma^2 e^{-\\frac{d_{i,j}^2}{2*\lambda^2}}`
 
         Args:
             * sigma             : Sigma term of the covariance
-            * lam               : Caracteristic length of the covariance
+            * lam               : Characteristic length of the covariance
 
         Kwargs:
             * function          : Can be 'gauss' or 'exp'
@@ -1019,7 +1019,7 @@ class insar(SourceInv):
         if function=='exp':
             self.Cd = sigma*sigma*np.exp(-1.0*distance/lam)
         elif function=='gauss':
-            self.Cd = sigma*sigma*np.exp(-1.0*distance*distance/(2*lam))
+            self.Cd = sigma*sigma*np.exp(-1.0*distance*distance/(2*lam*lam))
 
         # Normalize
         if normalizebystd:
